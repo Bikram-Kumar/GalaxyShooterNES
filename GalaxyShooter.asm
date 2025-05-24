@@ -5,6 +5,24 @@
   .inesmap 0   ; mapper 0 = NROM, no bank swapping
   .inesmir 1   ; background mirroring
   
+; ---- Variables ----
+  .rsset $0000
+  
+vars .rs 16
+playerX .rs 1
+playerY .rs 1
+score .rs 1
+buttons1 .rs 1       ; ABSeSt UDLR
+
+
+
+LEFT_EDGE = $04
+RIGHT_EDGE = $F4
+BOTTOM_EDGE = $E0
+TOP_EDGE = $20
+PLAYER_SPEED = $02
+  
+  
   
 ; --- PPU Registers ---
 
@@ -18,6 +36,11 @@ PPU_ADDR  = $2006
 PPU_DATA  = $2007
 OAM_DMA  = $4014
 
+JOYPAD1 = $4016
+JOYPAD2 = $4017
+
+APU_FRAME_COUNT = $4017
+
 ;;;;;;;;;;;;;;;
 
     
@@ -27,7 +50,7 @@ RESET:
   SEI          ; disable IRQs
   CLD          ; disable decimal mode
   LDX #$40
-  STX $4017    ; disable APU frame IRQ
+  STX APU_FRAME_COUNT    ; disable APU frame IRQ
   LDX #$FF
   TXS          ; Set up stack
   INX          ; now X = 0
@@ -119,14 +142,16 @@ LoadAttributeLoop:
                         ; if compare was equal to 128, keep going down
 
 
-              
-              
+  JSR InitGame
+  
+  
               
   LDA #%10010000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
   STA PPU_CTRL
 
   LDA #%00011110   ; enable sprites, enable background, no clipping on left side
   STA PPU_MASK
+  
 
 Forever:
   JMP Forever     ;jump back to Forever, infinite loop
@@ -138,38 +163,13 @@ NMI:
   STA OAM_ADDR       ; set the low byte (00) of the RAM address
   LDA #$02
   STA OAM_DMA       ; set the high byte (02) of the RAM address, start the transfer
-
-
-LatchController:
-  LDA #$01
-  STA $4016
-  LDA #$00
-  STA $4016       ; tell both the controllers to latch buttons
-
-
-ReadA: 
-  LDA $4016       ; player 1 - A
-  AND #%00000001  ; only look at bit 0
-  BEQ ReadADone   ; branch to ReadADone if button is NOT pressed (0)
-                  ; add instructions here to do something when button IS pressed (1)
-  LDA $0203       ; load sprite X position
-  CLC             ; make sure the carry flag is clear
-  ADC #$05        ; A = A + 1
-  STA $0203       ; save sprite X position
-ReadADone:        ; handling this button is done
+  
+  JSR ReadButtons1
+  JSR UpdatePlayer
+  
   
 
-ReadB: 
-  LDA $4016       ; player 1 - B
-  AND #%00000001  ; only look at bit 0
-  BEQ ReadBDone   ; branch to ReadBDone if button is NOT pressed (0)
-                  ; add instructions here to do something when button IS pressed (1)
-  LDA $0203       ; load sprite X position
-  SEC             ; make sure carry flag is set
-  SBC #$01        ; A = A - 1
-  STA $0203       ; save sprite X position
-ReadBDone:        ; handling this button is done
-
+  
 PPU_Cleanup:
   LDA #%10010000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
   STA PPU_CTRL
@@ -181,14 +181,117 @@ PPU_Cleanup:
   
   RTI             ; return from interrupt
  
+ 
+; ------- SUBROUTINES -------
+
+InitGame:
+  LDA #$80
+  STA playerX
+  STA playerY
+  RTS
+
+UpdatePlayer:
+  JSR MovePlayerLeft
+  JSR MovePlayerRight
+  JSR MovePlayerUp
+  JSR MovePlayerDown
+  LDA playerX
+  STA $0203
+  STA $020B
+  CLC
+  ADC #$08
+  STA $0207
+  STA $020F
+  LDA playerY
+  STA $0200
+  STA $0204
+  CLC
+  ADC #$08
+  STA $0208
+  STA $020C
+  RTS
+
+
+
+MovePlayerLeft:
+  LDA buttons1
+  AND #$02
+  BEQ end_MovePlayerLeft
+  
+  LDA playerX
+  SEC
+  SBC #PLAYER_SPEED
+  STA playerX
+  
+end_MovePlayerLeft:
+  RTS
+  
+MovePlayerRight:
+  LDA buttons1
+  AND #$01
+  BEQ end_MovePlayerRight
+  
+  LDA playerX
+  CLC
+  ADC #PLAYER_SPEED
+  STA playerX
+  
+end_MovePlayerRight:
+  RTS
+  
+  
+MovePlayerUp:
+  LDA buttons1
+  AND #$08
+  BEQ end_MovePlayerUp
+  
+  LDA playerY
+  SEC
+  SBC #PLAYER_SPEED
+  STA playerY
+  
+end_MovePlayerUp:
+  RTS
+  
+  
+  
+MovePlayerDown:
+  LDA buttons1
+  AND #$04
+  BEQ end_MovePlayerDown
+  
+  LDA playerY
+  CLC
+  ADC #PLAYER_SPEED
+  STA playerY
+  
+end_MovePlayerDown:
+  RTS
+
+
+
+ 
+ReadButtons1: 
+  LDA #$01
+  STA buttons1   ; buttons = 1, to stop loop after 8 times
+  STA JOYPAD1    ; Poll Input, 1 -> JOYPAD1
+  LSR A          ; A -> 0
+  STA JOYPAD1    ; Finish Polling, 0 -> JOYPAD1
+loop_ReadButtons1:
+  LDA JOYPAD1
+  LSR A
+  ROL buttons1    ; Carry -> bit 0; but 7 -> Carry
+  BCC loop_ReadButtons1
+  RTS
+ 
+ 
+ 
 ;;;;;;;;;;;;;;  
-  
-  
   
   .bank 1
   .org $E000
 palette:
-  .db $1F,$2A,$28,$1C,  $1F,$36,$17,$0F,  $1F,$30,$21,$0F,  $1F,$27,$17,$0F   ;;background palette
+  .db $1E,$2A,$28,$1C,  $1F,$36,$17,$0F,  $1F,$30,$21,$0F,  $1F,$27,$17,$0F   ;;background palette
   .db $1F,$2A,$28,$1C,  $1F,$02,$38,$3C,  $1F,$1C,$15,$14,  $1F,$02,$38,$3C   ;;sprite palette
 
 sprites:
