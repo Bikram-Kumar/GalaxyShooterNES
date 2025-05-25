@@ -9,8 +9,13 @@
   .rsset $0000
   
 vars .rs 16
+
+randomNum .rs 1     
+
 playerX .rs 1
 playerY .rs 1
+PLAYER_SPEED = $02
+
 score .rs 1
 buttons1 .rs 1       ; ABSeSt UDLR
 oamPointer .rs 1     ; index for unfilled OAM buffer
@@ -21,14 +26,23 @@ bulletsPosY .rs MAX_BULLET
 bulletsState .rs MAX_BULLET  ; Axxx xxxx , Active
 bulletSpawnTimer .rs 1
 
-LEFT_EDGE = $04
-RIGHT_EDGE = $F4
-BOTTOM_EDGE = $E0
-TOP_EDGE = $20
-
-PLAYER_SPEED = $02
 BULLET_SPEED = $04
 BULLET_SPAWN_TIME_INTERVAL = $06
+
+MAX_ENEMIES = 10
+enemiesPosX .rs MAX_ENEMIES
+enemiesPosY .rs MAX_ENEMIES
+enemiesState .rs MAX_ENEMIES   ; AHHx xxTT , Active Health Type
+enemySpawnTimer .rs 1
+
+ENEMY_SPEED = $04
+ENEMY_SPAWN_TIME_INTERVAL = $10
+
+LEFT_EDGE = $04
+RIGHT_EDGE = $F4
+BOTTOM_EDGE = $FC
+TOP_EDGE = $20
+
   
   
 ; --- PPU Registers ---
@@ -185,6 +199,8 @@ InitGame:
   LDA #$80
   STA playerX
   STA playerY
+  LDA #$26  ; Random seed
+  STA randomNum
   RTS
   
   
@@ -194,6 +210,7 @@ UpdateGame:
   JSR UpdatePlayer
   JSR ShootBullet
   JSR UpdateBullets
+  JSR UpdateEnemies
   
   RTS
   
@@ -359,6 +376,93 @@ SpawnBullet:
 
 end_ShootBullet:
   RTS
+  
+  
+  
+UpdateEnemies:
+  LDA enemySpawnTimer
+  BEQ skip_enemySpawnTimerUpdate
+  
+  DEC enemySpawnTimer
+  JMP skip_enemySpawn  ; if timer not over, skip spawn
+  
+skip_enemySpawnTimerUpdate:
+  JSR SpawnEnemy
+skip_enemySpawn:
+  LDX #$00
+loop_UpdateEnemies:
+  LDA enemiesState, X
+  AND #$80
+  BEQ skip_enemyPosUpdate
+  
+  LDA enemiesPosY, X
+  CLC
+  ADC #ENEMY_SPEED
+  STA enemiesPosY, X
+  BCS enemyDestroy  ; if overflow from screen, destroy enemy
+  
+  CMP #BOTTOM_EDGE
+  BCC skip_enemyDestroy 
+enemyDestroy:
+  LDA enemiesState, X
+  EOR #$80        ; make state inactive
+  STA enemiesState, X
+  
+skip_enemyDestroy:
+ 
+  ; Draw enemy sprite
+  LDY oamPointer
+  LDA enemiesPosX, X
+  STA $0203, Y
+  LDA enemiesPosY, X
+  STA $0200, Y
+  LDA #$02  ; Tile 
+  STA $0201, Y
+  LDA #$00  ; Attribute
+  STA $0202, Y
+  INY
+  INY
+  INY
+  INY
+  STY oamPointer
+  
+skip_enemyPosUpdate:
+  INX
+  CPX #MAX_ENEMIES
+  BCC loop_UpdateEnemies
+  
+  RTS
+  
+  
+  
+SpawnEnemy:
+  
+  LDA #ENEMY_SPAWN_TIME_INTERVAL
+  STA enemySpawnTimer
+  
+; check if any enemy is not active in array and spawn a new enemy there, otherwise skip
+  LDX #$00
+enemyCheckLoop:
+  LDA enemiesState, X
+  AND #$80
+  BEQ continueSpawnEnemy
+  INX
+  CPX #MAX_ENEMIES
+  BNE enemyCheckLoop
+  
+  JMP end_SpawnEnemy
+continueSpawnEnemy:
+   LDA #$80
+   STA enemiesState, X
+   JSR UpdateRandomNum
+   LDA randomNum
+   STA enemiesPosX, X
+   LDA #$10
+   STA enemiesPosY, X
+   
+end_SpawnEnemy:
+
+  RTS
 
 
 MovePlayerLeft:
@@ -434,6 +538,34 @@ loop_ReadButtons1:
  
  
  
+UpdateRandomNum:
+  TXA  ; push X on stack
+  PHA
+  
+  LDA randomNum
+  
+  ROL randomNum
+  ROL randomNum
+  ROL randomNum
+  
+  EOR randomNum
+  STA randomNum
+  
+  ROR randomNum
+  ROR randomNum
+  ROR randomNum
+  ROR randomNum
+  ROR randomNum
+  
+  EOR randomNum
+  STA randomNum
+  
+  PLA    ; restore X from stack
+  TAX
+  
+  RTS
+ 
+ 
 ;;;;;;;;;;;;;;  
   
   .bank 1
@@ -441,15 +573,6 @@ loop_ReadButtons1:
 palette:
   .db $1E,$2A,$28,$1C,  $1F,$36,$17,$0F,  $1F,$30,$21,$0F,  $1F,$27,$17,$0F   ;;background palette
   .db $1F,$2A,$28,$1C,  $1F,$02,$38,$3C,  $1F,$1C,$15,$14,  $1F,$02,$38,$3C   ;;sprite palette
-
-sprites:
-     ;vert tile attr horiz
-  .db $80, $01, $00, $80   ;sprite 0
-  .db $80, $02, $00, $88   ;sprite 1  // Player
-  .db $88, $11, $00, $80   ;sprite 2
-  .db $88, $12, $00, $88   ;sprite 3
-
-  .db $88, $00, $00, $88   ;sprite 4  // Bullet
 
 background:
   .db $24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24  ;;row 1
