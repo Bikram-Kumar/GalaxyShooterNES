@@ -13,15 +13,22 @@ playerX .rs 1
 playerY .rs 1
 score .rs 1
 buttons1 .rs 1       ; ABSeSt UDLR
+oamPointer .rs 1     ; index for unfilled OAM buffer
 
-
+MAX_BULLET = 8
+bulletsPosX .rs MAX_BULLET
+bulletsPosY .rs MAX_BULLET
+bulletsState .rs MAX_BULLET  ; Axxx xxxx , Active
+bulletSpawnTimer .rs 1
 
 LEFT_EDGE = $04
 RIGHT_EDGE = $F4
 BOTTOM_EDGE = $E0
 TOP_EDGE = $20
+
 PLAYER_SPEED = $02
-  
+BULLET_SPEED = $04
+BULLET_SPAWN_TIME_INTERVAL = $06
   
   
 ; --- PPU Registers ---
@@ -71,7 +78,7 @@ clrmem:
   STA $0500, x
   STA $0600, x
   STA $0700, x
-  LDA #$FE
+  LDA #$FE      ; all sprites invisible
   STA $0200, x
   INX
   BNE clrmem
@@ -98,17 +105,6 @@ LoadPalettesLoop:
 
 
 
-LoadSprites:
-  LDX #$00              ; start at 0
-LoadSpritesLoop:
-  LDA sprites, x        ; load data from address (sprites +  x)
-  STA $0200, x          ; store into RAM address ($0200 + x)
-  INX                   ; X = X + 1
-  CPX #$10              ; Compare X to hex $10, decimal 16
-  BNE LoadSpritesLoop   ; Branch to LoadSpritesLoop if compare was Not Equal to zero
-                        ; if compare was equal to 16, keep going down
-              
-              
               
 LoadBackground:
   LDA PPU_STATUS             ; read PPU status to reset the high/low latch
@@ -159,16 +155,14 @@ Forever:
  
 
 NMI:
+  JSR UpdateGame
+  
+  ; Transfer sprites
   LDA #$00
   STA OAM_ADDR       ; set the low byte (00) of the RAM address
   LDA #$02
   STA OAM_DMA       ; set the high byte (02) of the RAM address, start the transfer
   
-  JSR ReadButtons1
-  JSR UpdatePlayer
-  
-  
-
   
 PPU_Cleanup:
   LDA #%10010000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
@@ -182,6 +176,9 @@ PPU_Cleanup:
   RTI             ; return from interrupt
  
  
+ 
+ 
+ 
 ; ------- SUBROUTINES -------
 
 InitGame:
@@ -189,28 +186,179 @@ InitGame:
   STA playerX
   STA playerY
   RTS
+  
+  
+UpdateGame:
+  JSR ClearOAM
+  JSR ReadButtons1
+  JSR UpdatePlayer
+  JSR ShootBullet
+  JSR UpdateBullets
+  
+  RTS
+  
+  
+
 
 UpdatePlayer:
   JSR MovePlayerLeft
   JSR MovePlayerRight
   JSR MovePlayerUp
   JSR MovePlayerDown
+  JSR DrawPlayer
+  RTS
+  
+  
+ClearOAM:
+  LDA #$FE     ; make all sprites below the screen (invisible)
+  LDX #$00
+loop_ClearOAM:
+  STA $0200, X
+  INX
+  CPX oamPointer
+  BCC loop_ClearOAM
+  
+  LDA #$00
+  STA oamPointer    ; Reset oamPointer to 0
+
+  RTS
+  
+  
+DrawPlayer:
+  LDX oamPointer
+  
+  ; x-pos
   LDA playerX
-  STA $0203
-  STA $020B
+  STA $0203, X   ;top-left
+  STA $0203+8, X   ;bottom-left
   CLC
   ADC #$08
-  STA $0207
-  STA $020F
+  STA $0203+4, X   ;top-right
+  STA $0203+12, X   ;bottom-right
+  
+  ; y-pos
   LDA playerY
-  STA $0200
-  STA $0204
+  STA $0200, X   ;top-left
+  STA $0200+4, X   ;top-right
   CLC
   ADC #$08
-  STA $0208
-  STA $020C
+  STA $0200+8, X   ;bottom-left
+  STA $0200+12, X   ;bottom-right
+  
+  ; tiles
+  LDA #$01
+  STA $0201, X  
+  LDA #$02
+  STA $0201+4, X
+  LDA #$11
+  STA $0201+8, X
+  LDA #$12
+  STA $0201+12, X
+  
+  ; attributes
+  LDA #$00
+  STA $0202, X  
+  STA $0202+4, X
+  STA $0202+8, X
+  STA $0202+12, X
+  
+  TXA 
+  CLC
+  ADC #$10
+  STA oamPointer
+  
+  RTS
+  
+
+  
+UpdateBullets:
+  LDA bulletSpawnTimer
+  BEQ skip_bulletSpawnTimerUpdate
+  DEC bulletSpawnTimer
+skip_bulletSpawnTimerUpdate:
+  LDX #$00
+loop_UpdateBullets:
+  LDA bulletsState, X
+  AND #$80
+  BEQ skip_bulletPosUpdate
+  
+  LDA bulletsPosY, X
+  SEC
+  SBC #BULLET_SPEED
+  STA bulletsPosY, X
+  BCC bulletDestroy  ; if overflow from screen, destroy bullet
+  
+  CMP #TOP_EDGE
+  BCS skip_bulletDestroy 
+bulletDestroy:
+  LDA bulletsState, X
+  EOR #$80        ; make state inactive
+  STA bulletsState, X
+  
+skip_bulletDestroy:
+ 
+  ; Draw the Bullet
+  LDY oamPointer
+  LDA bulletsPosX, X
+  STA $0203, Y
+  LDA bulletsPosY, X
+  STA $0200, Y
+  LDA #$00  ; Tile 
+  STA $0201, Y
+  LDA #$00  ; Attribute
+  STA $0202, Y
+  INY
+  INY
+  INY
+  INY
+  STY oamPointer
+  
+skip_bulletPosUpdate:
+  INX
+  CPX #MAX_BULLET
+  BCC loop_UpdateBullets
+
   RTS
 
+
+ShootBullet:
+  LDA buttons1
+  AND #$80
+  BEQ end_ShootBullet
+  
+  ; check bullet spawn timer and continue if 0 and reset
+  LDA bulletSpawnTimer
+  BNE end_ShootBullet
+  
+  LDA #BULLET_SPAWN_TIME_INTERVAL
+  STA bulletSpawnTimer
+  
+; check if any bullet is not active in array and spawn a new bullet there, otherwise skip
+  LDX #$00
+bulletCheckLoop:
+  LDA bulletsState, X
+  AND #$80
+  BEQ SpawnBullet
+  INX
+  CPX #MAX_BULLET
+  BNE bulletCheckLoop
+  
+  JMP end_ShootBullet
+SpawnBullet:
+   LDA #$80
+   STA bulletsState, X
+   LDA playerX
+   CLC
+   ADC #$07              ; add offset from player position for the bullets
+   STA bulletsPosX, X
+   LDA playerY
+   SEC
+   SBC #$02
+   STA bulletsPosY, X
+  ;;;
+
+end_ShootBullet:
+  RTS
 
 
 MovePlayerLeft:
@@ -297,10 +445,11 @@ palette:
 sprites:
      ;vert tile attr horiz
   .db $80, $01, $00, $80   ;sprite 0
-  .db $80, $02, $00, $88   ;sprite 1
+  .db $80, $02, $00, $88   ;sprite 1  // Player
   .db $88, $11, $00, $80   ;sprite 2
   .db $88, $12, $00, $88   ;sprite 3
 
+  .db $88, $00, $00, $88   ;sprite 4  // Bullet
 
 background:
   .db $24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24  ;;row 1
