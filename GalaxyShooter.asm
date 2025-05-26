@@ -62,7 +62,30 @@ OAM_DMA  = $4014
 JOYPAD1 = $4016
 JOYPAD2 = $4017
 
-APU_FRAME_COUNT = $4017
+
+;----- APU Registers -----
+
+APU_SQUARE1_ENV = $4000   ; DDLC VVVV
+APU_SQUARE1_SWEEP = $4001  ; EPPP NSSS
+APU_SQUARE1_LOW = $4002    ; llll llll  , low timer
+APU_SQUARE1_LEN_HI = $4003   ; LLLL LHHH  ,   Length, High timer
+
+APU_SQUARE2_ENV = $4004
+APU_SQUARE2_SWEEP = $4005
+APU_SQUARE2_LOW = $4006
+APU_SQUARE2_HI = $4007
+
+APU_TRI_CTRL = $4008 ; CRRR RRRR 
+APU_TRI_LOW = $400A 
+APU_TRI_HI = $400B  ; LLLL LHHH , Length, High timer
+
+APU_NOISE_ENV = $400C
+APU_NOISE_MODE_PERIOD = $400E
+APU_NOISE_LENGTH = $400F
+
+APU_STATUS = $4015      ; xxxD NT21, IFxD NT21 : write, read
+APU_FRAME_COUNT = $4017   ; MIxx xxxx
+
 
 ;;;;;;;;;;;;;;;
 
@@ -232,11 +255,11 @@ UpdatePlayer:
 ClearOAM:
   LDA #$FE     ; make all sprites below the screen (invisible)
   LDX #$00
-loop_ClearOAM:
+.loop:
   STA $0200, X
   INX
   CPX oamPointer
-  BCC loop_ClearOAM
+  BCC .loop
   
   LDA #$00
   STA oamPointer    ; Reset oamPointer to 0
@@ -344,27 +367,27 @@ skip_bulletPosUpdate:
 ShootBullet:
   LDA buttons1
   AND #$80
-  BEQ end_ShootBullet
+  BEQ .end
   
   ; check bullet spawn timer and continue if 0 and reset
   LDA bulletSpawnTimer
-  BNE end_ShootBullet
+  BNE .end
   
   LDA #BULLET_SPAWN_TIME_INTERVAL
   STA bulletSpawnTimer
   
 ; check if any bullet is not active in array and spawn a new bullet there, otherwise skip
   LDX #$00
-bulletCheckLoop:
+.bulletCheckLoop:
   LDA bulletsState, X
   AND #$80
-  BEQ SpawnBullet
+  BEQ .spawnBullet
   INX
   CPX #MAX_BULLET
-  BNE bulletCheckLoop
+  BNE .bulletCheckLoop
   
-  JMP end_ShootBullet
-SpawnBullet:
+  JMP .end
+.spawnBullet:
    LDA #$80
    STA bulletsState, X
    LDA playerX
@@ -375,9 +398,10 @@ SpawnBullet:
    SEC
    SBC #$02
    STA bulletsPosY, X
-  ;;;
+   JSR PlayBulletSound
+  
 
-end_ShootBullet:
+.end:
   RTS
   
   
@@ -469,16 +493,16 @@ SpawnEnemy:
   
 ; check if any enemy is not active in array and spawn a new enemy there, otherwise skip
   LDX #$00
-enemyCheckLoop:
+.loop:
   LDA enemiesState, X
   AND #$80
-  BEQ continueSpawnEnemy
+  BEQ .continue
   INX
   CPX #MAX_ENEMIES
-  BNE enemyCheckLoop
+  BNE .loop
   
-  JMP end_SpawnEnemy
-continueSpawnEnemy:
+  JMP .end
+.continue:
    LDA #$80
    STA enemiesState, X
    JSR UpdateRandomNum
@@ -487,7 +511,7 @@ continueSpawnEnemy:
    LDA #$10
    STA enemiesPosY, X
    
-end_SpawnEnemy:
+.end:
 
   RTS
 
@@ -542,6 +566,8 @@ loop_collisionEnemies:
     EOR #$80       ; deactivate enemy
     STA enemiesState, Y
     
+    JSR PlayColisionSound
+    
 skip_collisionEnemies:
     INY
     CPY #MAX_ENEMIES
@@ -561,43 +587,46 @@ skip_collisionBullets:
 MovePlayerLeft:
   LDA buttons1
   AND #$02
-  BEQ end_MovePlayerLeft
+  BEQ .end
   
   LDA playerX
   SEC
   SBC #PLAYER_SPEED
   STA playerX
   
-end_MovePlayerLeft:
+.end:
   RTS
+  
+  
+  
   
   
   
 MovePlayerRight:
   LDA buttons1
   AND #$01
-  BEQ end_MovePlayerRight
+  BEQ .end
   
   LDA playerX
   CLC
   ADC #PLAYER_SPEED
   STA playerX
   
-end_MovePlayerRight:
+.end:
   RTS
   
   
 MovePlayerUp:
   LDA buttons1
   AND #$08
-  BEQ end_MovePlayerUp
+  BEQ .end
   
   LDA playerY
   SEC
   SBC #PLAYER_SPEED
   STA playerY
   
-end_MovePlayerUp:
+.end:
   RTS
   
   
@@ -605,14 +634,47 @@ end_MovePlayerUp:
 MovePlayerDown:
   LDA buttons1
   AND #$04
-  BEQ end_MovePlayerDown
+  BEQ .end
   
   LDA playerY
   CLC
   ADC #PLAYER_SPEED
   STA playerY
   
-end_MovePlayerDown:
+.end:
+  RTS
+  
+  
+  
+  
+
+PlayColisionSound:
+
+  LDA #%00000001
+  STA $4015 ;enable square 1
+
+  LDA #%10011111 ;Duty 10, Volume F
+  STA APU_SQUARE1_ENV
+  LDA #$C9 ;0C9 is a C# in NTSC mode
+  STA APU_SQUARE1_LOW
+  LDA #$10
+  STA APU_SQUARE1_LEN_HI
+  
+  RTS
+  
+  
+PlayBulletSound:
+
+  LDA #%00000001
+  STA $4015 ;enable square 1
+
+  LDA #%10011111 ;Duty 10, Volume F
+  STA APU_SQUARE1_ENV
+  LDA #$00 
+  STA APU_SQUARE1_LOW
+  LDA #$13
+  STA APU_SQUARE1_LEN_HI
+  
   RTS
 
 
@@ -624,19 +686,16 @@ ReadButtons1:
   STA JOYPAD1    ; Poll Input, 1 -> JOYPAD1
   LSR A          ; A -> 0
   STA JOYPAD1    ; Finish Polling, 0 -> JOYPAD1
-loop_ReadButtons1:
+.loop:
   LDA JOYPAD1
   LSR A
   ROL buttons1    ; Carry -> bit 0; but 7 -> Carry
-  BCC loop_ReadButtons1
+  BCC .loop
   RTS
  
  
  
 UpdateRandomNum:
-  TXA  ; push X on stack
-  PHA
-  
   LDA randomNum
   
   ROL randomNum
@@ -654,9 +713,6 @@ UpdateRandomNum:
   
   EOR randomNum
   STA randomNum
-  
-  PLA    ; restore X from stack
-  TAX
   
   RTS
  
