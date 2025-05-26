@@ -8,7 +8,7 @@
 ; ---- Variables ----
   .rsset $0000
   
-vars .rs 16
+variables .rs 16
 
 randomNum .rs 1     
 
@@ -34,9 +34,11 @@ enemiesPosX .rs MAX_ENEMIES
 enemiesPosY .rs MAX_ENEMIES
 enemiesState .rs MAX_ENEMIES   ; AHHx xxTT , Active Health Type
 enemySpawnTimer .rs 1
+enemyZigZagTimer .rs 1
 
-ENEMY_SPEED = $04
-ENEMY_SPAWN_TIME_INTERVAL = $10
+ENEMY_SPEED = $01
+ENEMY_SPAWN_TIME_INTERVAL = $40
+ENEMY_ZIG_ZAG_TIME_INTERVAL = $FF
 
 LEFT_EDGE = $04
 RIGHT_EDGE = $F4
@@ -211,6 +213,7 @@ UpdateGame:
   JSR ShootBullet
   JSR UpdateBullets
   JSR UpdateEnemies
+  JSR DetectCollisions
   
   RTS
   
@@ -380,6 +383,12 @@ end_ShootBullet:
   
   
 UpdateEnemies:
+
+  INC enemyZigZagTimer
+  INC enemyZigZagTimer
+  INC enemyZigZagTimer
+  INC enemyZigZagTimer
+
   LDA enemySpawnTimer
   BEQ skip_enemySpawnTimerUpdate
   
@@ -395,6 +404,24 @@ loop_UpdateEnemies:
   AND #$80
   BEQ skip_enemyPosUpdate
   
+  LDA enemyZigZagTimer
+  CMP #$80
+  BCC moveRight_UpdateEnemy 
+  
+  LDA enemiesPosX, X
+  SEC
+  SBC #ENEMY_SPEED
+  STA enemiesPosX, X
+
+  JMP endmoveRight_UpdateEnemy
+  
+moveRight_UpdateEnemy:
+  LDA enemiesPosX, X
+  CLC
+  ADC #ENEMY_SPEED
+  STA enemiesPosX, X
+
+endmoveRight_UpdateEnemy:
   LDA enemiesPosY, X
   CLC
   ADC #ENEMY_SPEED
@@ -418,7 +445,7 @@ skip_enemyDestroy:
   STA $0200, Y
   LDA #$02  ; Tile 
   STA $0201, Y
-  LDA #$00  ; Attribute
+  LDA #$01  ; Attribute
   STA $0202, Y
   INY
   INY
@@ -465,6 +492,72 @@ end_SpawnEnemy:
   RTS
 
 
+
+DetectCollisions:
+
+  LDX #$00
+loop_collisionBullets:
+  LDA bulletsState, X
+  AND #$80
+  BEQ skip_collisionBullets
+  
+  LDY #$00
+loop_collisionEnemies:
+    LDA enemiesState, Y
+    AND #$80
+    BEQ skip_collisionEnemies
+    
+    ; a.x2 > b.x1 && a.x1 < b.x2
+    LDA bulletsPosX, X    
+    CLC 
+    ADC #$08
+    CMP enemiesPosX, Y
+    BCC skip_collisionEnemies   ; skip if a.x2 < b.x1
+    
+    LDA enemiesPosX, Y
+    CLC 
+    ADC #$08
+    CMP bulletsPosX, X    
+    BCC skip_collisionEnemies   ; skip if b.x2 < a.x1
+    
+    ; a.y2 > b.y1 && a.y1 < b.y2
+    LDA bulletsPosY, X    
+    CLC 
+    ADC #$08
+    CMP enemiesPosY, Y
+    BCC skip_collisionEnemies   ; skip if a.y2 < b.y1
+    
+    LDA enemiesPosY, Y
+    CLC 
+    ADC #$08
+    CMP bulletsPosY, X    
+    BCC skip_collisionEnemies   ; skip if b.y2 < a.y1
+    
+    ; if not skipped, collision
+    LDA bulletsState, X
+    EOR #$80       ; deactivate bullet
+    STA bulletsState, X
+    
+    LDA enemiesState, Y
+    EOR #$80       ; deactivate enemy
+    STA enemiesState, Y
+    
+skip_collisionEnemies:
+    INY
+    CPY #MAX_ENEMIES
+    BCC loop_collisionEnemies
+
+skip_collisionBullets:
+  INX
+  CPX #MAX_BULLET
+  BCC loop_collisionBullets
+  
+
+  RTS
+
+
+
+
 MovePlayerLeft:
   LDA buttons1
   AND #$02
@@ -477,6 +570,8 @@ MovePlayerLeft:
   
 end_MovePlayerLeft:
   RTS
+  
+  
   
 MovePlayerRight:
   LDA buttons1
