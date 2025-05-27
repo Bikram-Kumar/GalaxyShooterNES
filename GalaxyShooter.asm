@@ -11,6 +11,7 @@
 variables .rs 16
 
 randomNum .rs 1     
+frameCounter .rs 1     
 
 playerX .rs 1
 playerY .rs 1
@@ -45,6 +46,8 @@ RIGHT_EDGE = $F4
 BOTTOM_EDGE = $FC
 TOP_EDGE = $20
 
+
+bgMusicCounter .rs 1
   
   
 ; --- PPU Registers ---
@@ -73,7 +76,7 @@ APU_SQUARE1_LEN_HI = $4003   ; LLLL LHHH  ,   Length, High timer
 APU_SQUARE2_ENV = $4004
 APU_SQUARE2_SWEEP = $4005
 APU_SQUARE2_LOW = $4006
-APU_SQUARE2_HI = $4007
+APU_SQUARE2_LEN_HI = $4007
 
 APU_TRI_CTRL = $4008 ; CRRR RRRR 
 APU_TRI_LOW = $400A 
@@ -194,6 +197,7 @@ Forever:
  
 
 NMI:
+  INC frameCounter
   JSR UpdateGame
   
   ; Transfer sprites
@@ -230,6 +234,7 @@ InitGame:
   
   
 UpdateGame:
+  JSR PlayBGMusic
   JSR ClearOAM
   JSR ReadButtons1
   JSR UpdatePlayer
@@ -487,8 +492,11 @@ skip_enemyPosUpdate:
   
   
 SpawnEnemy:
-  
-  LDA #ENEMY_SPAWN_TIME_INTERVAL
+
+  JSR UpdateRandomNum
+  LDA randomNum
+  AND #$0F    
+  ADC #ENEMY_SPAWN_TIME_INTERVAL
   STA enemySpawnTimer
   
 ; check if any enemy is not active in array and spawn a new enemy there, otherwise skip
@@ -657,7 +665,7 @@ PlayColisionSound:
   STA APU_SQUARE1_ENV
   LDA #$C9 ;0C9 is a C# in NTSC mode
   STA APU_SQUARE1_LOW
-  LDA #$10
+  LDA #$20
   STA APU_SQUARE1_LEN_HI
   
   RTS
@@ -670,10 +678,44 @@ PlayBulletSound:
 
   LDA #%10011111 ;Duty 10, Volume F
   STA APU_SQUARE1_ENV
-  LDA #$00 
+  LDA #$8F
   STA APU_SQUARE1_LOW
-  LDA #$13
+  LDA #$10
   STA APU_SQUARE1_LEN_HI
+  
+  RTS
+
+
+PlayBGMusic:
+
+  LDA bgMusicCounter
+  BEQ .resetCounter
+  DEC bgMusicCounter
+  JMP .endUpdateCounter
+  
+.resetCounter
+  LDA #BG_MUSIC_LENGTH
+  STA bgMusicCounter
+.endUpdateCounter
+  
+  LDA #%00000010
+  STA $4015 ;enable square 1
+  LDA #%10011100 ;Duty 10, Volume F
+  STA APU_SQUARE2_ENV
+  
+  LDA bgMusicCounter
+  LSR A
+  LSR A
+  LSR A
+  LSR A
+  TAX
+  LDA bgMusic, X
+  STA APU_SQUARE2_LOW
+  LDA #$F1
+  STA APU_SQUARE2_LEN_HI
+  
+  
+  
   
   RTS
 
@@ -724,6 +766,11 @@ UpdateRandomNum:
 palette:
   .db $1E,$2A,$28,$1C,  $1F,$36,$17,$0F,  $1F,$30,$21,$0F,  $1F,$27,$17,$0F   ;;background palette
   .db $1F,$2A,$28,$1C,  $1F,$02,$38,$3C,  $1F,$1C,$15,$14,  $1F,$02,$38,$3C   ;;sprite palette
+
+BG_MUSIC_LENGTH = 16 * $0F
+bgMusic:
+  .db $c9, $d9, $c9, $00, $d9, $c9, $d9, $00
+  .db $24, $24, $24, $24, $24, $24, $24, $24
 
 background:
   .db $24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24  ;;row 1
