@@ -43,7 +43,7 @@ ENEMY_ZIG_ZAG_TIME_INTERVAL = $FF
 
 LEFT_EDGE = $04
 RIGHT_EDGE = $F4
-BOTTOM_EDGE = $FC
+BOTTOM_EDGE = $FE
 TOP_EDGE = $20
 
 
@@ -630,6 +630,8 @@ MovePlayerUp:
   BEQ .end
   
   LDA playerY
+  CMP #TOP_EDGE
+  BCC .end
   SEC
   SBC #PLAYER_SPEED
   STA playerY
@@ -645,6 +647,8 @@ MovePlayerDown:
   BEQ .end
   
   LDA playerY
+  CMP #BOTTOM_EDGE-40
+  BCS .end
   CLC
   ADC #PLAYER_SPEED
   STA playerY
@@ -688,33 +692,33 @@ PlayBulletSound:
 
 PlayBGMusic:
 
+  LDA frameCounter
+  AND #$0F   ; use first 4 bits as counter to play next note
+  BNE .playNote
+  
   LDA bgMusicCounter
+  CMP #BG_MUSIC_LENGTH
   BEQ .resetCounter
-  DEC bgMusicCounter
-  JMP .endUpdateCounter
-  
+  INC bgMusicCounter
+  JMP .endResetCounter
 .resetCounter
-  LDA #BG_MUSIC_LENGTH
+  LDA #$00
   STA bgMusicCounter
-.endUpdateCounter
-  
+.endResetCounter
+
+.playNote
   LDA #%00000010
   STA $4015 ;enable square 1
   LDA #%10011100 ;Duty 10, Volume F
   STA APU_SQUARE2_ENV
   
-  LDA bgMusicCounter
-  LSR A
-  LSR A
-  LSR A
-  LSR A
-  TAX
-  LDA bgMusic, X
+  LDX bgMusicCounter
+  LDY bgMusic, X
+  LDA notesTableLo, Y
   STA APU_SQUARE2_LOW
-  LDA #$F1
+  LDA notesTableHi, Y
+  ORA #$F0
   STA APU_SQUARE2_LEN_HI
-  
-  
   
   
   RTS
@@ -767,10 +771,12 @@ palette:
   .db $1E,$2A,$28,$1C,  $1F,$36,$17,$0F,  $1F,$30,$21,$0F,  $1F,$27,$17,$0F   ;;background palette
   .db $1F,$2A,$28,$1C,  $1F,$02,$38,$3C,  $1F,$1C,$15,$14,  $1F,$02,$38,$3C   ;;sprite palette
 
-BG_MUSIC_LENGTH = 16 * $0F
+BG_MUSIC_LENGTH = $20
 bgMusic:
-  .db $c9, $d9, $c9, $00, $d9, $c9, $d9, $00
-  .db $24, $24, $24, $24, $24, $24, $24, $24
+  .db C3, D3, E3, F3, G3, E3, C3, C3
+  .db E3, G3, A3, G3, F3, E3, D3, D3
+  .db C3, E3, G3, A3, F3, E3, C3, D3
+  .db E3, D3, Cs3, D3, D3, Cs3, Cs3, $50
 
 background:
   .db $24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24,$24  ;;row 1
@@ -791,6 +797,8 @@ attribute:
   .db $24,$24,$24,$24, $47,$47,$24,$24 ,$47,$47,$47,$47, $47,$47,$24,$24 ,$24,$24,$24,$24 ,$24,$24,$24,$24, $24,$24,$24,$24, $55,$56,$24,$24  ;;brick bottoms
 
 
+
+  .include "NotesTable.asm"
 
   .org $FFFA     ;first of the three vectors starts here
   .dw NMI        ;when an NMI happens (once per frame if enabled) the 
