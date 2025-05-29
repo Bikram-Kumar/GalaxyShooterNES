@@ -11,6 +11,8 @@
 variables .rs 16
 
 randomNum .rs 1     
+
+frameCounterH .rs 1       ; higher byte for frameCounter
 frameCounter .rs 1     
 
 playerX .rs 1
@@ -36,9 +38,9 @@ enemiesPosY .rs MAX_ENEMIES
 enemiesState .rs MAX_ENEMIES   ; AHHx xxTT , Active Health Type
 enemySpawnTimer .rs 1
 enemyZigZagTimer .rs 1
+enemySpawnTimeInterval .rs 1
 
 ENEMY_SPEED = $01
-ENEMY_SPAWN_TIME_INTERVAL = $40
 ENEMY_ZIG_ZAG_TIME_INTERVAL = $FF
 
 LEFT_EDGE = $04
@@ -197,7 +199,7 @@ Forever:
  
 
 NMI:
-  INC frameCounter
+  
   JSR UpdateGame
   
   ; Transfer sprites
@@ -230,10 +232,13 @@ InitGame:
   STA playerY
   LDA #$26  ; Random seed
   STA randomNum
+  LDA #$50
+  STA enemySpawnTimeInterval
   RTS
   
   
 UpdateGame:
+  JSR UpdateFrameCounter
   JSR PlayBGMusic
   JSR ClearOAM
   JSR ReadButtons1
@@ -242,9 +247,17 @@ UpdateGame:
   JSR UpdateBullets
   JSR UpdateEnemies
   JSR DetectCollisions
+  JSR DetectGameOver
   
   RTS
-  
+
+
+UpdateFrameCounter:
+  INC frameCounter
+  BCC .end
+  INC frameCounterH
+.end
+  RTS
   
 
 
@@ -419,52 +432,61 @@ UpdateEnemies:
   INC enemyZigZagTimer
 
   LDA enemySpawnTimer
-  BEQ skip_enemySpawnTimerUpdate
+  BEQ .skip_enemySpawnTimerUpdate
   
   DEC enemySpawnTimer
-  JMP skip_enemySpawn  ; if timer not over, skip spawn
+  JMP .skip_enemySpawn  ; if timer not over, skip spawn
   
-skip_enemySpawnTimerUpdate:
+.skip_enemySpawnTimerUpdate:
   JSR SpawnEnemy
-skip_enemySpawn:
+.skip_enemySpawn:
   LDX #$00
-loop_UpdateEnemies:
+.loop_UpdateEnemies:
   LDA enemiesState, X
   AND #$80
-  BEQ skip_enemyPosUpdate
+  BEQ .skip_enemyPosUpdate
   
-  LDA enemyZigZagTimer
+  LDA enemiesState, X
+  AND #$03  ; Check enemy type
+  BEQ .endMoveRight  ; Type 0 -> No x-movement
+  CMP #$01  
+  BEQ .moveRight   ; Type 1 -> move right
+  CMP #$02  
+  BEQ .moveLeft   ; Type 2 -> move left
+  
+  LDA enemyZigZagTimer   ; Type 3 -> zig zag
   CMP #$80
-  BCC moveRight_UpdateEnemy 
-  
+  BCC .moveRight 
+
+.moveLeft:
   LDA enemiesPosX, X
   SEC
   SBC #ENEMY_SPEED
   STA enemiesPosX, X
 
-  JMP endmoveRight_UpdateEnemy
+  JMP .endMoveRight
   
-moveRight_UpdateEnemy:
+.moveRight:
   LDA enemiesPosX, X
   CLC
   ADC #ENEMY_SPEED
   STA enemiesPosX, X
 
-endmoveRight_UpdateEnemy:
+.endMoveRight:
   LDA enemiesPosY, X
   CLC
   ADC #ENEMY_SPEED
   STA enemiesPosY, X
-  BCS enemyDestroy  ; if overflow from screen, destroy enemy
+  BCS .enemyDestroy  ; if overflow from screen, destroy enemy
   
   CMP #BOTTOM_EDGE
-  BCC skip_enemyDestroy 
-enemyDestroy:
+  BCC .skip_enemyDestroy 
+.enemyDestroy:
   LDA enemiesState, X
   EOR #$80        ; make state inactive
   STA enemiesState, X
   
-skip_enemyDestroy:
+.skip_enemyDestroy:
  
   ; Draw enemy sprite
   LDY oamPointer
@@ -482,10 +504,10 @@ skip_enemyDestroy:
   INY
   STY oamPointer
   
-skip_enemyPosUpdate:
+.skip_enemyPosUpdate:
   INX
   CPX #MAX_ENEMIES
-  BCC loop_UpdateEnemies
+  BCC .loop_UpdateEnemies
   
   RTS
   
@@ -496,9 +518,17 @@ SpawnEnemy:
   JSR UpdateRandomNum
   LDA randomNum
   AND #$0F    
-  ADC #ENEMY_SPAWN_TIME_INTERVAL
+  ADC enemySpawnTimeInterval
   STA enemySpawnTimer
   
+  LDA enemySpawnTimeInterval
+  CMP #$08
+  BCC .skip_enemySpawnTimerIntervalUpdate
+  DEC enemySpawnTimeInterval
+  
+.skip_enemySpawnTimerIntervalUpdate
+
+.spawn
 ; check if any enemy is not active in array and spawn a new enemy there, otherwise skip
   LDX #$00
 .loop:
@@ -511,14 +541,21 @@ SpawnEnemy:
   
   JMP .end
 .continue:
-   LDA #$80
-   STA enemiesState, X
-   JSR UpdateRandomNum
-   LDA randomNum
-   STA enemiesPosX, X
-   LDA #$10
-   STA enemiesPosY, X
-   
+  JSR UpdateRandomNum
+  LDA randomNum
+  AND #$03   ; Last two bits for enemy type
+  ORA #$80
+  STA enemiesState, X
+  JSR UpdateRandomNum
+  LDA randomNum
+  STA enemiesPosX, X
+  LDA #$10
+  STA enemiesPosY, X
+  
+  JSR UpdateRandomNum  ; spawn more enemies randomly
+  LDA #$40
+  CMP randomNum
+  BCS .loop
 .end:
 
   RTS
@@ -528,42 +565,42 @@ SpawnEnemy:
 DetectCollisions:
 
   LDX #$00
-loop_collisionBullets:
+.loop_collisionBullets:
   LDA bulletsState, X
   AND #$80
-  BEQ skip_collisionBullets
+  BEQ .skip_collisionBullets
   
   LDY #$00
-loop_collisionEnemies:
+.loop_collisionEnemies:
     LDA enemiesState, Y
     AND #$80
-    BEQ skip_collisionEnemies
+    BEQ .skip_collisionEnemies
     
     ; a.x2 > b.x1 && a.x1 < b.x2
     LDA bulletsPosX, X    
     CLC 
     ADC #$08
     CMP enemiesPosX, Y
-    BCC skip_collisionEnemies   ; skip if a.x2 < b.x1
+    BCC .skip_collisionEnemies   ; skip if a.x2 < b.x1
     
     LDA enemiesPosX, Y
     CLC 
     ADC #$08
     CMP bulletsPosX, X    
-    BCC skip_collisionEnemies   ; skip if b.x2 < a.x1
+    BCC .skip_collisionEnemies   ; skip if b.x2 < a.x1
     
     ; a.y2 > b.y1 && a.y1 < b.y2
     LDA bulletsPosY, X    
     CLC 
     ADC #$08
     CMP enemiesPosY, Y
-    BCC skip_collisionEnemies   ; skip if a.y2 < b.y1
+    BCC .skip_collisionEnemies   ; skip if a.y2 < b.y1
     
     LDA enemiesPosY, Y
     CLC 
     ADC #$08
     CMP bulletsPosY, X    
-    BCC skip_collisionEnemies   ; skip if b.y2 < a.y1
+    BCC .skip_collisionEnemies   ; skip if b.y2 < a.y1
     
     ; if not skipped, collision
     LDA bulletsState, X
@@ -576,16 +613,72 @@ loop_collisionEnemies:
     
     JSR PlayColisionSound
     
-skip_collisionEnemies:
+.skip_collisionEnemies:
     INY
     CPY #MAX_ENEMIES
-    BCC loop_collisionEnemies
+    BCC .loop_collisionEnemies
 
-skip_collisionBullets:
+.skip_collisionBullets:
   INX
   CPX #MAX_BULLET
-  BCC loop_collisionBullets
+  BCC .loop_collisionBullets
   
+
+  RTS
+  
+  
+  
+DetectGameOver:
+  LDX #$00
+.loop_enemies:
+  LDA enemiesState, X
+  AND #$80
+  BEQ .skip_collisionEnemies
+  
+  ; a.x2 > b.x1 && a.x1 < b.x2
+  LDA playerX
+  CLC 
+  ADC #$10
+  BCS .continueCheck1  ; overflow, so pass
+  CMP enemiesPosX, X
+  BCC .skip_collisionEnemies   ; skip if a.x2 < b.x1
+  
+.continueCheck1
+  LDA enemiesPosX, X
+  CLC 
+  ADC #$08
+  BCS .continueCheck2
+  CMP playerX
+  BCC .skip_collisionEnemies   ; skip if b.x2 < a.x1
+
+.continueCheck2
+    
+  ; a.y2 > b.y1 && a.y1 < b.y2
+  LDA playerY    
+  CLC 
+  ADC #$10
+  CMP enemiesPosY, X
+  BCC .skip_collisionEnemies   ; skip if a.y2 < b.y1
+    
+  LDA enemiesPosY, X
+  CLC 
+  ADC #$08
+  CMP playerY
+  BCC .skip_collisionEnemies   ; skip if b.y2 < a.y1
+  
+  ; --- Game Over ---
+  LDA enemiesState, X
+  EOR #$80
+  STA enemiesState, X
+  JSR InitGame
+  
+.skip_collisionEnemies
+  INX 
+  CPX #MAX_ENEMIES
+  BCC .loop_enemies
+  
+  
+
 
   RTS
 
